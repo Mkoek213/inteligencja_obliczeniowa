@@ -17,7 +17,7 @@ Projekt spełnia wymagania zadania na najwyższy próg, ponieważ zawiera własn
 - `X` - pułapka,
 - `.` - wolne pole.
 
-W środowisku dostępne są trzy warianty map. Przy resecie wybierana jest jedna z nich, chyba że użytkownik poda konkretny `map_id`. Dzięki temu agent jest sprawdzany na kilku układach labiryntu, ale mapy pozostają deterministyczne i możliwe do rozwiązania.
+W środowisku dostępne są trzy warianty map wbudowanych. Przy resecie wybierana jest jedna z nich, chyba że użytkownik poda konkretny `map_id`. Dzięki temu agent jest sprawdzany na kilku układach labiryntu, ale mapy pozostają deterministyczne i możliwe do rozwiązania. Środowisko obsługuje też listę map przekazaną z zewnątrz, co pozwala trenować i uruchamiać agentów na mapach generowanych proceduralnie.
 
 Przestrzeń akcji jest dyskretna i zawiera cztery akcje:
 
@@ -27,6 +27,20 @@ Przestrzeń akcji jest dyskretna i zawiera cztery akcje:
 - `DOWN = 3`.
 
 Przestrzeń obserwacji jest słownikiem `spaces.Dict`. Zawiera identyfikator mapy, pozycję agenta, pozycję skarbu, pozycję wyjścia, informację o posiadaniu skarbu, macierz ścian oraz macierz pułapek. Jest to duża przestrzeń dyskretna, ponieważ stan środowiska obejmuje nie tylko pozycję agenta, lecz także strukturę całej planszy.
+
+## 2.1. Generator map
+
+Generator został dodany w pliku `map_gen.py`. Główna funkcja `generate_map(width, height, difficulty, path_width, seed)` tworzy najpierw labirynt korytarzy, a dopiero potem rozmieszcza elementy gry. Labirynt powstaje algorytmem randomized DFS/backtracking na siatce komórek pomocniczych. Każda odwiedzona komórka oraz przejście między komórkami są wycinane w macierzy ścian jako korytarz o szerokości `path_width` kratek.
+
+Po utworzeniu labiryntu generator wybiera pozycje `S`, `T` i `E` na podstawie odległości BFS. Start i wyjście są umieszczane daleko od siebie, a skarb trafia w punkt oddalony zarówno od startu, jak i wyjścia. Dzięki temu trasa ma sensowną długość i wymusza cel etapowy.
+
+Parametr `difficulty` steruje liczbą pułapek `X`. Dla wartości od `0` do `1` jest traktowany jako gęstość pułapek na dostępnych polach, a dla wartości większych niż `1` jako dokładna liczba pułapek. Generator najpierw wyznacza chronioną ścieżkę `S -> T -> E`, nie umieszcza na niej pułapek, a następnie dodatkowo sprawdza całą mapę algorytmem BFS. Jeżeli mapa nie ma rozwiązania, generowanie jest ponawiane.
+
+Przykładowa komenda podglądu map:
+
+```bash
+.venv/bin/python lab04/map_gen.py --count 3 --width 14 --height 14 --difficulty 0.12 --path-width 2 --seed 11
+```
 
 ## 3. System nagród
 
@@ -77,11 +91,25 @@ Taka strategia jest wystarczająca dla planszy kratowej z równymi kosztami prze
 
 ## 6. Eksperymenty
 
-Trening agenta RL uruchomiono komendą:
+Trening agenta RL na mapach wbudowanych uruchomiono komendą:
 
 ```bash
 .venv/bin/python lab04/train_treasure_escape_rl.py --episodes 1000 --eval-episodes 60
 ```
+
+Trening na mapach generowanych uruchamia się przez podanie liczby map i parametrów generatora:
+
+```bash
+.venv/bin/python lab04/train_treasure_escape_rl.py --episodes 3000 --eval-episodes 100 --generated-maps 5 --width 14 --height 14 --difficulty 0.12 --path-width 2 --map-seed 11
+```
+
+W przypadku map generowanych tablica Q pozostaje tablicowa i ma wymiary zależne od aktywnego środowiska:
+
+```text
+liczba_wygenerowanych_map x wysokość x szerokość x 2 x liczba_akcji
+```
+
+Do odtworzenia wytrenowanego modelu na mapach generowanych trzeba podać te same parametry generatora i ten sam `--map-seed`, ponieważ `map_id` odnosi się do kolejności map w wygenerowanym zestawie.
 
 Skrypt zapisuje wyniki do katalogu `lab04/outputs/q_learning`:
 

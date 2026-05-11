@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import deque
 from enum import IntEnum
+from collections.abc import Sequence
 from typing import Any
 
 import numpy as np
@@ -74,6 +75,7 @@ class TreasureEscapeEnv(gym.Env):
         map_id: int | None = None,
         max_steps: int = 120,
         window_size: int = 600,
+        maps: Sequence[Sequence[str]] | None = None,
     ):
         assert render_mode is None or render_mode in self.metadata["render_modes"]
 
@@ -81,17 +83,36 @@ class TreasureEscapeEnv(gym.Env):
         self.map_id = map_id
         self.max_steps = max_steps
         self.window_size = window_size
+        self.maps = tuple(tuple(row for row in map_lines) for map_lines in (maps or DEFAULT_MAPS))
+        if not self.maps:
+            raise ValueError("At least one map is required.")
 
-        self.size = len(DEFAULT_MAPS[0])
+        self.height = len(self.maps[0])
+        self.width = len(self.maps[0][0])
+        self.size = self.height
+        self.map_count = len(self.maps)
+        self._validate_maps()
         self.observation_space = spaces.Dict(
             {
-                "map_id": spaces.Discrete(len(DEFAULT_MAPS)),
-                "agent": spaces.Box(0, self.size - 1, shape=(2,), dtype=np.int64),
-                "treasure": spaces.Box(0, self.size - 1, shape=(2,), dtype=np.int64),
-                "exit": spaces.Box(0, self.size - 1, shape=(2,), dtype=np.int64),
+                "map_id": spaces.Discrete(self.map_count),
+                "agent": spaces.Box(
+                    low=np.array([0, 0], dtype=np.int64),
+                    high=np.array([self.height - 1, self.width - 1], dtype=np.int64),
+                    dtype=np.int64,
+                ),
+                "treasure": spaces.Box(
+                    low=np.array([0, 0], dtype=np.int64),
+                    high=np.array([self.height - 1, self.width - 1], dtype=np.int64),
+                    dtype=np.int64,
+                ),
+                "exit": spaces.Box(
+                    low=np.array([0, 0], dtype=np.int64),
+                    high=np.array([self.height - 1, self.width - 1], dtype=np.int64),
+                    dtype=np.int64,
+                ),
                 "has_treasure": spaces.Discrete(2),
-                "walls": spaces.MultiBinary((self.size, self.size)),
-                "traps": spaces.MultiBinary((self.size, self.size)),
+                "walls": spaces.MultiBinary((self.height, self.width)),
+                "traps": spaces.MultiBinary((self.height, self.width)),
             }
         )
         self.action_space = spaces.Discrete(len(Actions))
@@ -106,8 +127,8 @@ class TreasureEscapeEnv(gym.Env):
         self.window = None
         self.clock = None
 
-        self._walls = np.zeros((self.size, self.size), dtype=np.int8)
-        self._traps = np.zeros((self.size, self.size), dtype=np.int8)
+        self._walls = np.zeros((self.height, self.width), dtype=np.int8)
+        self._traps = np.zeros((self.height, self.width), dtype=np.int8)
         self._agent_location = np.zeros(2, dtype=np.int64)
         self._start_location = np.zeros(2, dtype=np.int64)
         self._treasure_location = np.zeros(2, dtype=np.int64)
@@ -116,13 +137,21 @@ class TreasureEscapeEnv(gym.Env):
         self._step_count = 0
         self._current_map_id = 0
 
+    def _validate_maps(self) -> None:
+        for map_lines in self.maps:
+            if len(map_lines) != self.height:
+                raise ValueError("All maps must have the same height.")
+            for line in map_lines:
+                if len(line) != self.width:
+                    raise ValueError("All maps must have the same width.")
+
     def _parse_map(self, map_lines: tuple[str, ...]) -> None:
         self._walls.fill(0)
         self._traps.fill(0)
         start = treasure = exit_location = None
 
         for row, line in enumerate(map_lines):
-            if len(line) != self.size:
+            if len(line) != self.width:
                 raise ValueError("All map rows must have the same length.")
             for col, tile in enumerate(line):
                 position = np.array([row, col], dtype=np.int64)
@@ -170,7 +199,7 @@ class TreasureEscapeEnv(gym.Env):
                 nxt = (current[0] + int(direction[0]), current[1] + int(direction[1]))
                 if (
                     nxt in visited
-                    or not (0 <= nxt[0] < self.size and 0 <= nxt[1] < self.size)
+                    or not (0 <= nxt[0] < self.height and 0 <= nxt[1] < self.width)
                     or self._walls[nxt] == 1
                     or self._traps[nxt] == 1
                 ):
@@ -201,10 +230,10 @@ class TreasureEscapeEnv(gym.Env):
         if options and "map_id" in options:
             requested_map_id = int(options["map_id"])
         if requested_map_id is None:
-            requested_map_id = int(self.np_random.integers(len(DEFAULT_MAPS)))
+            requested_map_id = int(self.np_random.integers(self.map_count))
 
-        self._current_map_id = requested_map_id % len(DEFAULT_MAPS)
-        self._parse_map(DEFAULT_MAPS[self._current_map_id])
+        self._current_map_id = requested_map_id % self.map_count
+        self._parse_map(self.maps[self._current_map_id])
         self._has_treasure = 0
         self._step_count = 0
 
@@ -233,9 +262,9 @@ class TreasureEscapeEnv(gym.Env):
 
         blocked = (
             row < 0
-            or row >= self.size
+            or row >= self.height
             or col < 0
-            or col >= self.size
+            or col >= self.width
             or self._walls[row, col] == 1
         )
 
@@ -303,7 +332,9 @@ class TreasureEscapeEnv(gym.Env):
 
         canvas = pygame.Surface((self.window_size, self.window_size))
         canvas.fill((245, 246, 248))
-        cell_size = self.window_size / self.size
+        cell_width = self.window_size / self.width
+        cell_height = self.window_size / self.height
+        token_size = min(cell_width, cell_height)
 
         colors = {
             "floor": (245, 246, 248),
@@ -316,13 +347,13 @@ class TreasureEscapeEnv(gym.Env):
             "agent": (45, 102, 210),
         }
 
-        for row in range(self.size):
-            for col in range(self.size):
+        for row in range(self.height):
+            for col in range(self.width):
                 rect = pygame.Rect(
-                    round(col * cell_size),
-                    round(row * cell_size),
-                    round(cell_size),
-                    round(cell_size),
+                    round(col * cell_width),
+                    round(row * cell_height),
+                    round(cell_width),
+                    round(cell_height),
                 )
                 if self._walls[row, col]:
                     pygame.draw.rect(canvas, colors["wall"], rect)
@@ -333,26 +364,26 @@ class TreasureEscapeEnv(gym.Env):
                 pygame.draw.rect(canvas, colors["grid"], rect, 1)
 
         treasure_center = (
-            round((self._treasure_location[1] + 0.5) * cell_size),
-            round((self._treasure_location[0] + 0.5) * cell_size),
+            round((self._treasure_location[1] + 0.5) * cell_width),
+            round((self._treasure_location[0] + 0.5) * cell_height),
         )
         if not self._has_treasure:
-            pygame.draw.circle(canvas, colors["treasure"], treasure_center, round(cell_size * 0.28))
+            pygame.draw.circle(canvas, colors["treasure"], treasure_center, round(token_size * 0.28))
 
         exit_rect = pygame.Rect(
-            round((self._exit_location[1] + 0.18) * cell_size),
-            round((self._exit_location[0] + 0.18) * cell_size),
-            round(cell_size * 0.64),
-            round(cell_size * 0.64),
+            round((self._exit_location[1] + 0.18) * cell_width),
+            round((self._exit_location[0] + 0.18) * cell_height),
+            round(cell_width * 0.64),
+            round(cell_height * 0.64),
         )
         exit_color = colors["exit_open"] if self._has_treasure else colors["exit_locked"]
         pygame.draw.rect(canvas, exit_color, exit_rect, border_radius=6)
 
         agent_center = (
-            round((self._agent_location[1] + 0.5) * cell_size),
-            round((self._agent_location[0] + 0.5) * cell_size),
+            round((self._agent_location[1] + 0.5) * cell_width),
+            round((self._agent_location[0] + 0.5) * cell_height),
         )
-        pygame.draw.circle(canvas, colors["agent"], agent_center, round(cell_size * 0.3))
+        pygame.draw.circle(canvas, colors["agent"], agent_center, round(token_size * 0.3))
 
         if self.render_mode == "human":
             self.window.blit(canvas, canvas.get_rect())
@@ -371,5 +402,9 @@ class TreasureEscapeEnv(gym.Env):
         self.clock = None
 
 
-def make_env(render_mode: str | None = None, map_id: int | None = None) -> TreasureEscapeEnv:
-    return TreasureEscapeEnv(render_mode=render_mode, map_id=map_id)
+def make_env(
+    render_mode: str | None = None,
+    map_id: int | None = None,
+    maps: Sequence[Sequence[str]] | None = None,
+) -> TreasureEscapeEnv:
+    return TreasureEscapeEnv(render_mode=render_mode, map_id=map_id, maps=maps)

@@ -12,7 +12,8 @@ os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib-cache")
 import matplotlib.pyplot as plt
 import numpy as np
 
-from treasure_escape_env import DEFAULT_MAPS, TreasureEscapeEnv
+from map_gen import generate_maps
+from treasure_escape_env import TreasureEscapeEnv
 
 
 @dataclass
@@ -25,6 +26,8 @@ class TrainingConfig:
     epsilon_decay: float = 0.996
     shaping_scale: float = 0.03
     seed: int = 11
+    map_id: int | None = None
+    max_steps: int = 120
 
 
 class QLearningAgent:
@@ -41,9 +44,9 @@ class QLearningAgent:
     @classmethod
     def fresh(cls, env: TreasureEscapeEnv, epsilon: float, rng: np.random.Generator):
         q_shape = (
-            len(DEFAULT_MAPS),
-            env.size,
-            env.size,
+            env.map_count,
+            env.height,
+            env.width,
             2,
             env.action_space.n,
         )
@@ -99,10 +102,14 @@ def shaped_reward(
     return reward + shaping_scale * (previous_distance - next_distance)
 
 
-def train(config: TrainingConfig, output_dir: Path) -> tuple[QLearningAgent, list[dict]]:
+def train(
+    config: TrainingConfig,
+    output_dir: Path,
+    maps: tuple[tuple[str, ...], ...] | None = None,
+) -> tuple[QLearningAgent, list[dict]]:
     output_dir.mkdir(parents=True, exist_ok=True)
     rng = np.random.default_rng(config.seed)
-    env = TreasureEscapeEnv()
+    env = TreasureEscapeEnv(map_id=config.map_id, max_steps=config.max_steps, maps=maps)
     agent = QLearningAgent.fresh(env, epsilon=config.epsilon_start, rng=rng)
     history: list[dict] = []
 
@@ -159,10 +166,17 @@ def evaluate(
     episodes: int,
     seed: int,
     map_id: int | None = None,
+    maps: tuple[tuple[str, ...], ...] | None = None,
+    max_steps: int = 120,
     render: bool = False,
     sleep: float = 0.04,
 ) -> dict[str, float]:
-    env = TreasureEscapeEnv(render_mode="human" if render else None, map_id=map_id)
+    env = TreasureEscapeEnv(
+        render_mode="human" if render else None,
+        map_id=map_id,
+        max_steps=max_steps,
+        maps=maps,
+    )
     rewards = []
     steps = []
     successes = []
@@ -241,19 +255,60 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--episodes", type=int, default=5000)
     parser.add_argument("--eval-episodes", type=int, default=100)
     parser.add_argument("--seed", type=int, default=11)
+    parser.add_argument("--map-id", type=int, default=None)
     parser.add_argument("--output-dir", type=Path, default=Path("lab04/outputs/q_learning"))
+    parser.add_argument("--max-steps", type=int, default=120)
+    parser.add_argument("--generated-maps", type=int, default=0)
+    parser.add_argument("--width", type=int, default=10)
+    parser.add_argument("--height", type=int, default=10)
+    parser.add_argument("--difficulty", type=float, default=0.08)
+    parser.add_argument("--path-width", type=int, default=1)
+    parser.add_argument("--map-seed", type=int, default=None)
     parser.add_argument("--render-eval", action="store_true")
     return parser.parse_args()
 
 
+def maps_from_args(args: argparse.Namespace) -> tuple[tuple[str, ...], ...] | None:
+    if args.generated_maps <= 0:
+        return None
+    return generate_maps(
+        count=args.generated_maps,
+        width=args.width,
+        height=args.height,
+        difficulty=args.difficulty,
+        path_width=args.path_width,
+        seed=args.seed if args.map_seed is None else args.map_seed,
+    )
+
+
 def main() -> None:
     args = parse_args()
-    config = TrainingConfig(episodes=args.episodes, seed=args.seed)
-    agent, history = train(config, args.output_dir)
-    metrics = evaluate(agent, episodes=args.eval_episodes, seed=args.seed + 100_000)
+    maps = maps_from_args(args)
+    config = TrainingConfig(
+        episodes=args.episodes,
+        seed=args.seed,
+        map_id=args.map_id,
+        max_steps=args.max_steps,
+    )
+    agent, history = train(config, args.output_dir, maps=maps)
+    metrics = evaluate(
+        agent,
+        episodes=args.eval_episodes,
+        seed=args.seed + 100_000,
+        map_id=args.map_id,
+        maps=maps,
+        max_steps=args.max_steps,
+    )
 
     print("Q-learning training finished")
     print(f"  episodes:       {args.episodes}")
+    map_source = (
+        f"{args.generated_maps} generated maps"
+        if maps is not None
+        else "built-in maps"
+    )
+    map_selection = "random" if args.map_id is None else f"map {args.map_id}"
+    print(f"  map mode:       {map_source}, {map_selection}")
     print(f"  final epsilon:  {history[-1]['epsilon']:.3f}")
     print(f"  q-table:        {args.output_dir / 'q_table.npy'}")
     print(f"  curve csv:      {args.output_dir / 'learning_curve.csv'}")
@@ -266,7 +321,15 @@ def main() -> None:
 
     if args.render_eval:
         eval_agent = QLearningAgent(agent.q_table, epsilon=0.0, rng=np.random.default_rng(args.seed))
-        evaluate(eval_agent, episodes=1, seed=args.seed + 200_000, render=True)
+        evaluate(
+            eval_agent,
+            episodes=1,
+            seed=args.seed + 200_000,
+            map_id=args.map_id,
+            maps=maps,
+            max_steps=args.max_steps,
+            render=True,
+        )
 
 
 if __name__ == "__main__":

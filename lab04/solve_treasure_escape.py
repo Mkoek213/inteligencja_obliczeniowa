@@ -8,6 +8,7 @@ from typing import Iterable
 
 import numpy as np
 
+from map_gen import generate_maps
 from treasure_escape_env import Actions, TreasureEscapeEnv
 
 
@@ -170,17 +171,43 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--episodes", type=int, default=30)
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--map-id", type=int, default=None)
+    parser.add_argument("--max-steps", type=int, default=120)
+    parser.add_argument("--generated-maps", type=int, default=0)
+    parser.add_argument("--width", type=int, default=10)
+    parser.add_argument("--height", type=int, default=10)
+    parser.add_argument("--difficulty", type=float, default=0.08)
+    parser.add_argument("--path-width", type=int, default=1)
+    parser.add_argument("--map-seed", type=int, default=11)
     parser.add_argument("--render", action="store_true")
     parser.add_argument("--sleep", type=float, default=0.05)
     parser.add_argument("--random-baseline", action="store_true")
     return parser.parse_args()
 
 
+def maps_from_args(args: argparse.Namespace) -> tuple[tuple[str, ...], ...] | None:
+    if args.generated_maps <= 0:
+        return None
+    return generate_maps(
+        count=args.generated_maps,
+        width=args.width,
+        height=args.height,
+        difficulty=args.difficulty,
+        path_width=args.path_width,
+        seed=args.map_seed,
+    )
+
+
 def main() -> None:
     args = parse_args()
     render_mode = "human" if args.render else None
+    maps = maps_from_args(args)
 
-    strategic_env = TreasureEscapeEnv(render_mode=render_mode, map_id=args.map_id)
+    strategic_env = TreasureEscapeEnv(
+        render_mode=render_mode,
+        map_id=args.map_id,
+        max_steps=args.max_steps,
+        maps=maps,
+    )
     strategic_agent = StrategicBFSAgent()
     strategic_results = [
         run_episode(
@@ -196,7 +223,11 @@ def main() -> None:
     summarize_results("Strategic BFS agent", strategic_results)
 
     if args.random_baseline:
-        random_env = TreasureEscapeEnv(map_id=args.map_id)
+        random_env = TreasureEscapeEnv(
+            map_id=args.map_id,
+            max_steps=args.max_steps,
+            maps=maps,
+        )
         random_agent = RandomAgent(random_env.action_space, seed=args.seed)
         random_results = [
             run_episode(random_env, random_agent, seed=args.seed + episode)
